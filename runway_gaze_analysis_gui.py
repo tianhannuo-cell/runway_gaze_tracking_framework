@@ -9,26 +9,9 @@ from PIL import Image, ImageTk
 import os
 import re
 import sys
-# 确保gaze_calibration_system.py与此脚本在同一目录下
 from gaze_calbration import GazeCalibrationSystem, get_primary_screen_size
-#from src.elg_demo import sight_analysis
-
-
-# def resource_path(relative_path):
-#     try:
-#         base_path = sys._MEIPASS
-#     except Exception:
-#         base_path = os.path.abspath(os.path.dirname(__file__))
-#     return os.path.join(base_path, relative_path)
 
 def parse_model_ratio(s):
-    """
-    解析 model_ratio 参数，支持两种形式：
-    1) '1x2x3'                      -> [[1, 2, 3]]
-    2) '1x2x3,2x3x4,1x1x2'          -> [[1, 2, 3], [2, 3, 4], [1, 1, 2]]
-
-    每组三个数字依次表示：头 : 躯干 : 腿
-    """
     import argparse
 
     ratio_list = []
@@ -39,7 +22,7 @@ def parse_model_ratio(s):
         nums = [float(item) for item in part.split('x')]
         if len(nums) != 3:
             raise argparse.ArgumentTypeError(
-                "每个 model_ratio 必须是 'aXbXc' 形式，例如 '1x2x3' 或 '1x2x3,2x3x4'"
+                "Each model_ratio must be in the form of 'aXbXc', For example, '1x2x3' or '1x2x3,2x3x4'"
             )
         ratio_list.append(nums)
 
@@ -49,9 +32,7 @@ def parse_model_ratio(s):
     return ratio_list
 
 def app_path():
-    """获取应用的根目录，用于写入文件。在开发时是项目根目录，在打包后是.exe文件所在的目录。"""
     if getattr(sys, 'frozen', False):
-        # 如果程序被打包
         return os.path.dirname(sys.executable)
     else:
         return os.path.abspath(os.path.join(os.path.dirname(__file__), 'output'))
@@ -64,7 +45,7 @@ class GazeApp(tk.Tk):
         self.geometry("1200x700")
         self.minsize(1000, 650)
 
-        # --- 数据与状态 ---
+        # --- Data and Status ---
         self.backend_thread = None
         self.comm_queue = queue.Queue()
         # self.final_image_path = None
@@ -76,10 +57,10 @@ class GazeApp(tk.Tk):
         self.calibrationPoints = []
         self.calibrationNums = []
 
-        # --- 创建UI组件 ---
+        # --- Creating UI Components ---
         self.create_widgets()
 
-        # --- 启动队列轮询 ---
+        # --- Start queue polling ---
         self.process_queue()
 
         self.args = None
@@ -87,13 +68,9 @@ class GazeApp(tk.Tk):
     def   create_widgets(self):
         main_frame = ttk.Frame(self, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=tk.YES)
-        # 【核心修改】: 创建并配置样式
         style = ttk.Style(self)
-        # 定义主操作按钮样式 (蓝底白字)
         style.configure('Primary.TButton', foreground='blue', background='#007bff')
-        # 定义取消按钮样式 (红字)
         style.configure('Cancel.TButton', foreground='red')
-        # 映射样式状态，以便在禁用时也能正确显示
         style.map('Primary.TButton',
             background=[('active', '#0056b3'), ('disabled', '#c0c0c0')])
         style.map('Cancel.TButton',
@@ -102,12 +79,11 @@ class GazeApp(tk.Tk):
         top_panel = ttk.Frame(main_frame)
         top_panel.pack(side=tk.TOP, fill=tk.BOTH, expand=tk.YES)
 
-        # --- 左侧：参数设置区 ---
-        # 将 settings_frame 放入 top_panel
+        # --- Left side: Parameter setting area ---
         settings_frame = ttk.Labelframe(top_panel, text="Parameter Settings", padding="10")
         settings_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10), anchor='n')
 
-        # 1. 实验设置
+        # 1. Experimental setup
         exp_frame = ttk.Frame(settings_frame)
         exp_frame.pack(fill=tk.X, pady=5)
         ttk.Label(exp_frame, text="Subject ID:").pack(side=tk.LEFT, padx=5)
@@ -123,7 +99,7 @@ class GazeApp(tk.Tk):
         img_entry.pack(side=tk.LEFT, fill=tk.X, expand=tk.YES)
         ttk.Button(img_frame, text="浏览...", command=self.browse_image).pack(side=tk.LEFT, padx=5)
 
-        # 2. 模型配置
+        # 2. Model Configuration
         model_frame = ttk.Labelframe(settings_frame, text="模型配置", padding="10")
         model_frame.pack(fill=tk.X, pady=5)
 
@@ -139,32 +115,29 @@ class GazeApp(tk.Tk):
                                  values=["none", "sma", "wma", "kalman", "one_euro"], state="readonly")
         filter_cb.grid(row=1, column=1, sticky="ew", padx=5, pady=5)
 
-        # =========== 【新增代码开始】 ===========
-        # 1. 模特数量 (Spinbox类型)
+        # 2.1. Number of models (Spinbox type)
         ttk.Label(model_frame, text="模特数量:").grid(row=2, column=0, sticky="w", padx=5, pady=5)
         self.model_num_var = tk.IntVar(value=1)
-        # width设为5保持与其他控件对齐，范围设为1-10
         tk.Spinbox(model_frame, from_=1, to=10, textvariable=self.model_num_var, width=5).grid(row=2, column=1,
                                                                                                sticky="w", padx=5,
                                                                                                pady=5)
-        # 2. 模特比例 (Label类型 - 实际需用Entry输入，Label作为提示)
-        # 提示用户格式，例如 1x2x3
+        # 2.2. Model proportions (Label type)
+        # Prompt the user to use the format, such as 1x2x3
         ttk.Label(model_frame, text="模特比例 (头x身x腿):").grid(row=3, column=0, sticky="w", padx=5, pady=5)
         self.model_ratio_var = tk.StringVar(value="24x71x83")
         ttk.Entry(model_frame, textvariable=self.model_ratio_var, width=15).grid(row=3, column=1, sticky="ew", padx=5,
                                                                                  pady=5)
 
-        # Row 4: 模特身高 (Label + Entry)
+        # 2.3. Model height (Label + Entry)
         ttk.Label(model_frame, text="模特身高:").grid(row=4, column=0, sticky="w", padx=5, pady=5)
         self.model_height = tk.StringVar(value=134)  # 默认身高 175
         ttk.Entry(model_frame, textvariable=self.model_height, width=23).grid(row=4, column=1, sticky="w", padx=5,
                                                                               pady=5)
-        # =========== 【新增代码end】 ===========
 
         input_calib_frame = ttk.Labelframe(settings_frame, text="输入与校准", padding="10")
         input_calib_frame.pack(fill=tk.X, pady=5)
 
-        # 3. 硬件配置
+        # 3. Hardware configuration
         hw_frame = ttk.Labelframe(settings_frame, text="硬件配置", padding="10")
         hw_frame.pack(fill=tk.X, pady=5)
 
@@ -178,58 +151,51 @@ class GazeApp(tk.Tk):
         self.screen_size_entry = ttk.Entry(hw_frame, textvariable=self.screen_size_var, width=15)
         self.screen_size_entry.grid(row=1, column=1, sticky="ew", padx=5, pady=5)
 
-        # 4.高级设置
+        # 4.Advanced settings
         adv_frame = ttk.Labelframe(settings_frame, text="高级设置", padding="10")
         adv_frame.pack(fill=tk.X, pady=10)
-        # 4a. 上传视频
+        # 4.1. Upload video
         ttk.Label(adv_frame, text="视频文件:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
         self.adv_video_path_var = tk.StringVar(value="")
         adv_video_entry = ttk.Entry(adv_frame, textvariable=self.adv_video_path_var, state="readonly", width=15)
         adv_video_entry.grid(row=0, column=1, sticky="ew", padx=5, pady=2)
-        adv_video_btn = ttk.Button(adv_frame, text="浏览...", command=self.browse_video_file)  # 启用并添加命令
+        adv_video_btn = ttk.Button(adv_frame, text="浏览...", command=self.browse_video_file)
         adv_video_btn.grid(row=0, column=2, sticky="w", padx=5, pady=2)
         # style = Style()
         # style.configure("TButton", , background="blue", relief="raised")
         self.cancel_video_btn = ttk.Button(adv_frame, text="×", command=self.cancel_video_selection, width=2, state="disabled",style='Cancel.TButton')
         self.cancel_video_btn.grid(row=0, column=3, sticky="w", padx=2)
-        # 4aa.视频分析按钮
+        # 4.1.1. Video Analysis Button
         self.video_analysis_button = ttk.Button(adv_frame, text="视频视线分析与结果导出", state="disabled", command=self.run_video_analysis, style='Primary.TButton')
         self.video_analysis_button.grid(row=1, column=0, columnspan=4, sticky="ew", padx=5, pady=(5,0))
 
         # ttk.Separator(adv_frame, orient='horizontal').grid(row=1, column=0, columnspan=3, sticky='ew', pady=10)
 
-        # 4b. 校准点个数
+        # 4.2. Number of calibration points
         ttk.Label(adv_frame, text="校准点网格:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
         ttk.Label(adv_frame, text="行:").grid(row=3, column=0, sticky="e", padx=5, pady=2)
         self.adv_rows_var = tk.IntVar(value=5)
-        adv_rows_spinbox = tk.Spinbox(adv_frame, from_=2, to=10, textvariable=self.adv_rows_var, width=5)  # 启用
+        adv_rows_spinbox = tk.Spinbox(adv_frame, from_=2, to=10, textvariable=self.adv_rows_var, width=5)
         adv_rows_spinbox.grid(row=3, column=1, sticky="w", padx=5, pady=2)
 
         ttk.Label(adv_frame, text="列:").grid(row=4, column=0, sticky="e", padx=5, pady=2)
         self.adv_cols_var = tk.IntVar(value=6)
-        adv_cols_spinbox = tk.Spinbox(adv_frame, from_=2, to=10, textvariable=self.adv_cols_var, width=5)  # 启用
+        adv_cols_spinbox = tk.Spinbox(adv_frame, from_=2, to=10, textvariable=self.adv_cols_var, width=5)
         adv_cols_spinbox.grid(row=4, column=1, sticky="w", padx=5, pady=2)
 
         # ttk.Separator(adv_frame, orient='horizontal').grid(row=5, column=0, columnspan=3, sticky='ew', pady=5)
 
-        # --- 右侧：状态与输出区 ---
-        # 【代码修复】: 将 output_frame 放入 top_panel
+        # --- Right side: Status and output area ---
         output_frame = ttk.Frame(top_panel)
         output_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=tk.YES)
 
-        # 4. 状态日志
+        # 4. Status Log
         log_frame = ttk.Labelframe(output_frame, text="状态日志", padding="10")
         log_frame.pack(fill=tk.BOTH, expand=tk.YES)
         self.log_text = scrolledtext.Text(log_frame, wrap=tk.WORD, height=10, state="disabled")
         self.log_text.pack(fill=tk.BOTH, expand=tk.YES)
 
-        # 5. 结果预览
-        # preview_frame = ttk.Labelframe(output_frame, text="分析结果预览", padding="10")
-        # preview_frame.pack(fill=tk.BOTH, expand=tk.YES, pady=(10, 0))
-        # self.image_label = ttk.Label(preview_frame, text="分析完成后，结果将在此处显示")
-        # self.image_label.pack(fill=tk.BOTH, expand=tk.YES)
-
-        # 5. 结果预览 (重构为左右两个面板)
+        # 5. Results Preview
         preview_container = ttk.Frame(output_frame)
         preview_container.pack(fill=tk.BOTH, expand=tk.YES)
 
@@ -243,7 +209,7 @@ class GazeApp(tk.Tk):
         self.image_label_right = ttk.Label(preview_right_frame, text="热图分析将在此处显示")
         self.image_label_right.pack(fill=tk.BOTH, expand=tk.YES)
 
-        # --- 底部：主控制区 ---
+        # ---Bottom: Main Control Area ---
         action_frame = ttk.Frame(main_frame, padding="10 0 0 0")
         action_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
@@ -256,10 +222,10 @@ class GazeApp(tk.Tk):
         self.exit_button = ttk.Button(action_frame, text="退出", command=self.quit)
         self.exit_button.pack(side=tk.LEFT, padx=5)
 
-        # 控件组，方便统一禁用/启用
+        # Control group: Convenient for unified disabling/enabling
         self.settings_widgets = [exp_frame, model_frame, hw_frame]
 
-        self.auto_detect_screen_size()  # 自动填充
+        self.auto_detect_screen_size()
 
     def browse_image(self):
         file_path = filedialog.askopenfilename(
@@ -273,7 +239,6 @@ class GazeApp(tk.Tk):
         path = filedialog.askopenfilename(title="选择视频文件", filetypes=[("Video Files", "*.mp4 *.avi *.mov")])
         if path:
             self.adv_video_path_var.set(path)
-            # 更新按钮状态
             self.start_button.config(state="disabled")
             self.video_analysis_button.config(state="normal")
             self.cancel_video_btn.config(state="normal")
@@ -289,7 +254,6 @@ class GazeApp(tk.Tk):
             # self.calibrationPoints = list(zip(x_coord, y_coord))
 
     def cancel_video_selection(self, delete_video = True):
-        """【新增】: 取消视频选择并重置UI状态"""
         if delete_video:
             self.adv_video_path_var.set("")
             self.start_button.config(state="normal")
@@ -321,13 +285,8 @@ class GazeApp(tk.Tk):
         parser_video.add_argument('--camera_id', type=int, default=1, help='ID of webcam to use')
 
         args_video = parser_video.parse_args()
-        # sight_analysis(args_video,0)
-
-        # subprocess.call(['python', 'elg_demo.py'])  # 调用视频
-
         messagebox.showinfo("分析完成", "视频分析完成！")
 
-        # 恢复UI状态
         self.cancel_video_selection(delete_video = False)
         self.log_message("视频视线分析完成，视线结果保存在demo_gaze_result.csv，"
                          "可以开始实验任务！")
@@ -355,13 +314,10 @@ class GazeApp(tk.Tk):
                 except tk.TclError:
                     pass  # Some widgets like Labels don't have a state
         self.start_button.config(state=state)
-        # # 如果有视频被选中，则start_button依然保持禁用
-        # if self.adv_video_path_var.get():
-        #      self.start_button.config(state="disabled")
         self.exit_button.config(state=state)
 
     def start_experiment(self):
-        # 1. 验证输入
+        # 1. Validate Input
         screen_size_str = self.screen_size_var.get()
         if not re.match(r'^\d+x\d+$', screen_size_str):
             messagebox.showerror("输入错误", "屏幕尺寸格式不正确，应为 '宽x高' (例如 '1920x1080')。")
@@ -371,7 +327,7 @@ class GazeApp(tk.Tk):
             messagebox.showerror("输入错误", "请选择一个场景图片。")
             return
 
-        # 2. 收集参数
+        # 2. Collect Parameters
         settings = {
             'participant_id': self.participant_id_var.get(),
             'scene_image': self.scene_image_var.get(),
@@ -379,7 +335,7 @@ class GazeApp(tk.Tk):
             'filter': self.filter_var.get(),
             'camera_id': self.camera_id_var.get(),
             'screen_size': [int(i) for i in screen_size_str.split('x')],
-            'generate_heatmap': True  # GUI模式下总是生成热力图
+            'generate_heatmap': True
         }
 
         parser = argparse.ArgumentParser(description='眼动追踪校准与实时实验系统')
@@ -397,61 +353,44 @@ class GazeApp(tk.Tk):
         parser.add_argument('--scene_image', type=str, default= self.scene_image, help='用于热力图分析的背景场景图片。')
         parser.add_argument('--generate_heatmap', default = True,action='store_true', help='实验结束后，自动生成场景化热力图分析。')
 
-        # 上传视频相关
+        # Upload Video Related
         parser.add_argument('--from_video', type=str, help='Use this video path instead of webcam',
                             default= self.adv_video_path_var.get())
         parser.add_argument('--record_video', type=str, help='Output path of video of demonstration.',
                             default= f'{self.adv_video_path_var.get()}_output.mp4')
 
-        # 校准点相关
+        # Calibration Point Related
         parser.add_argument('--calibrationNums', type= int, nargs= '+',
                             default= [self.adv_rows_var.get(), self.adv_cols_var.get()])
 
         parser.add_argument('--figName', default=self.participant_id_var.get())
-
-        # parser.add_argument('--scene_image', type=str, default=(os.path.join(app_path(), 'F:\sceneimage\model321.jpg')),
-        #                     help='用于热力图分析的背景场景图片。')
         parser.add_argument('--model_num', type=int, default=self.model_num_var.get())
-        # current_ratio_str = self.model_ratio_var.get()
-        # # 使用脚本开头定义的 parse_model_ratio 函数将字符串转换为列表
-        # # 注意：argparse的default参数不会自动经过type转换，所以这里必须手动转换
-        # ratio_list_val = parse_model_ratio(current_ratio_str)
         parser.add_argument('--model_ratio', type=parse_model_ratio, default=self.model_ratio_var.get(),
                             help="每个人形的头-躯干-腿的比例。"
                                  "示例: '1x2x3'（单个人形）或 '1x2x3,2x3x4,1x1x2'（多个人形各自比例）"
                             )
         parser.add_argument('--model_height', type=lambda s: [float(item) for item in s.split(',')],default=self.model_height.get())
 
-        # 摄像头模式
+        # Camera Mode
         if self.adv_video_path_var.get() == "":
             parser.add_argument('--csv_path', type=str)
             args = parser.parse_args()
-            # 3. 禁用UI并启动后端线程
+            # Disable UI and start backend thread
             self.toggle_settings_enabled(enabled=False)
-            self.log_message("--- 开始新任务 ---")
+            self.log_message("--- Start a new task ---")
             self.progress_bar['value'] = 0
-            # self.final_image_path = None  # 重置
-
-            # 将GazeCalibrationSystem的运行封装到新线程中
             self.run_backend_task(args,self.comm_queue)
-            # self.backend_thread = threading.Thread(
-            #     target=self.run_backend_task,
-            #     args=(args, self.comm_queue),
-            #     daemon=True
-            # )
-            # self.backend_thread.start()
-        # 视频模式
+           
+        # Video mode
         else:
 
             parser.add_argument('--csv_path', type=str, default=(os.path.join(app_path(), 'demo_gaze_result.csv')))
 
             args = parser.parse_args()
-            # 3. 禁用UI并启动后端线程
+            # Disable UI and start backend thread
             self.toggle_settings_enabled(enabled=False)
-            self.log_message("--- 开始新任务 ---")
+            self.log_message("--- Start a new task ---")
             self.progress_bar['value'] = 0
-            # self.final_image_path = None  # 重置
-            # 将GazeCalibrationSystem的运行封装到新线程中
             self.backend_thread = threading.Thread(
                 target=self.run_backend_task,
                 args=(args, self.comm_queue),
@@ -460,13 +399,12 @@ class GazeApp(tk.Tk):
             self.backend_thread.start()
 
     def run_backend_task(self, args, comm_queue):
-        """这个函数在独立的线程中运行，不会阻塞GUI"""
+        """This function runs in a separate thread and will not block the GUI"""
         try:
-            # GazeCalibrationSystem现在需要一个队列来进行通信
             backend = GazeCalibrationSystem(args)
             backend.run()
         except Exception as e:
-            # 将异常信息格式化，以便更好地调试
+            # Formatting of exception information
             import traceback
             error_info = f"后端任务发生严重错误:\n{traceback.format_exc()}"
             comm_queue.put(("ERROR", error_info))
@@ -474,7 +412,7 @@ class GazeApp(tk.Tk):
             comm_queue.put(("FINISHED", None))
 
     def process_queue(self):
-        """定期检查队列中是否有来自后端的消息，并更新UI"""
+        """Periodically check the queue for messages from the backend and update the UI accordingly"""
         try:
             while True:
                 msg_type, msg_data = self.comm_queue.get_nowait()
@@ -485,9 +423,9 @@ class GazeApp(tk.Tk):
                     current, total = msg_data
                     self.progress_bar['value'] = (current / total) * 100
                 elif msg_type == "HIDE_GUI":
-                    self.withdraw()  # 隐藏主窗口，为全屏校准让路
+                    self.withdraw()
                 elif msg_type == "SHOW_GUI":
-                    self.deiconify()  # 恢复主窗口
+                    self.deiconify()
                 elif msg_type == "RESULT":
                     # self.final_image_path = msg_data['img_path']
                     self.display_result_image()
@@ -495,19 +433,19 @@ class GazeApp(tk.Tk):
                     messagebox.showerror("后端错误", msg_data)
                 elif msg_type == "FINISHED":
                     self.toggle_settings_enabled(enabled=True)
-                    self.log_message("--- 任务完成 ---")
-                    break  # 退出循环，直到下一次任务
+                    self.log_message("--- Task completed ---")
+                    break  # Exit the loop until the next task.
 
             self.display_result_image()
 
         except queue.Empty:
-            pass  # 队列为空，什么都不做
+            pass
         finally:
-            # 每100ms检查一次队列
+            # The queue is checked every 100ms
             self.after(100, self.process_queue)
 
     def _load_and_display_image(self, path, label_widget):
-        """辅助函数，用于加载、缩放和显示单张图片"""
+        """Helper functions for loading, scaling, and displaying a single image"""
         if not path or not os.path.exists(path):
             label_widget.config(text=f"未能加载图片:\n{path}")
             return
@@ -534,38 +472,13 @@ class GazeApp(tk.Tk):
         self._load_and_display_image(self.heatmap_path, self.image_label_left)
         self._load_and_display_image(self.final_image_path, self.image_label_right)
 
-        # if not self.final_image_path or not os.path.exists(self.final_image_path):
-        #     self.image_label.config(text="未能加载结果图片。")
-        #     return
-        # try:
-        #     # 获取Label的尺寸以进行缩放
-        #     self.update_idletasks()  # 确保获取到最新的尺寸
-        #     label_w = self.image_label.winfo_width()
-        #     label_h = self.image_label.winfo_height()
-        #
-        #     if label_w < 20 or label_h < 20:  # 窗口可能还未完全绘制
-        #         self.after(100, self.display_result_image)  # 稍后重试
-        #         return
-        #
-        #     img = Image.open(self.final_image_path)
-        #     # 兼容旧版Pillow
-        #     thumbnail_method = getattr(Image, 'Resampling', Image).LANCZOS
-        #     img.thumbnail((label_w, label_h), thumbnail_method)
-        #
-        #     photo = ImageTk.PhotoImage(img)
-        #     self.image_label.config(image=photo)
-        #     self.image_label.image = photo  # 保持引用，防止被垃圾回收
-        # except Exception as e:
-        #     self.log_message(f"显示结果图片时出错: {e}")
-        #     self.image_label.config(text=f"加载图片失败:\n{self.final_image_path}")
-
     def quit(self):
         if messagebox.askokcancel("退出", "您确定要退出程序吗?"):
             self.destroy()
 
 
 if __name__ == '__main__':
-    # 为了让打包成exe更容易，将ELG的tensorflow依赖检查放在这里
+    # To make packaging into an EXE easier, the ELG TensorFlow dependency check is placed here
     try:
         import tensorflow as tf
 
